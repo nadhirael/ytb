@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Auto-Shuffle YouTube Viewer</title>
+  <title>Auto-Shuffle YouTube Viewer (Max 3 Sesi)</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -34,20 +34,19 @@
       width: 100%;
       height: 100%;
     }
-    /* Layar overlay saat jeda antar-video */
-    .delay-overlay {
+    .overlay-screen {
       position: absolute;
       inset: 0;
-      background: rgba(15, 15, 15, 0.92);
+      background: rgba(15, 15, 15, 0.94);
       display: none;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       text-align: center;
       z-index: 10;
-      padding: 20px;
+      padding: 24px;
     }
-    .delay-overlay.active {
+    .overlay-screen.active {
       display: flex;
     }
     .delay-timer {
@@ -55,6 +54,12 @@
       font-weight: bold;
       color: #ff0000;
       margin: 8px 0;
+    }
+    .done-title {
+      font-size: 24px;
+      font-weight: bold;
+      color: #4ade80;
+      margin-bottom: 8px;
     }
     .status-bar {
       background: #1e1e1e;
@@ -90,6 +95,7 @@
     button:hover { opacity: 0.85; }
     .btn-next { background: #ff0000; color: #fff; }
     .btn-shuffle { background: #333333; color: #fff; }
+    .btn-restart { background: #4ade80; color: #0f0f0f; margin-top: 16px; padding: 10px 20px; }
     .queue-box {
       margin-top: 16px;
       background: #181818;
@@ -119,10 +125,19 @@
 <div class="container">
   <div class="player-wrapper">
     <div id="player"></div>
-    <div class="delay-overlay" id="delayOverlay">
+
+    <!-- Overlay Jeda Antar-Video -->
+    <div class="overlay-screen" id="delayOverlay">
       <div>Menyiapkan video berikutnya dalam...</div>
       <div class="delay-timer" id="countdownText">0</div>
       <div style="font-size: 13px; color: #aaa;">Jeda otomatis agar pemutaran lebih natural</div>
+    </div>
+
+    <!-- Overlay Selesai 3 Sesi -->
+    <div class="overlay-screen" id="finishedOverlay">
+      <div class="done-title">✅ Target Selesai!</div>
+      <div id="finishedSubtext" style="color: #ccc; font-size: 15px;">Semua video telah diputar sebanyak 3 sesi penuh.</div>
+      <button class="btn-restart" onclick="restartFromBeginning()">Mulai Ulang 3 Sesi Lagi</button>
     </div>
   </div>
 
@@ -135,7 +150,7 @@
   </div>
 
   <div class="queue-box">
-    <div>Urutan Sesi Ini (Semua akan diputar sebelum diacak ulang):</div>
+    <div>Urutan Sesi Ini (Semua akan diputar sebelum lanjut ke sesi berikutnya):</div>
     <div class="queue-list" id="queueList"></div>
   </div>
 </div>
@@ -145,18 +160,14 @@
   // PENGATURAN UTAMA (EDIT BAGIAN INI LANGSUNG DI GITHUB)
   // =========================================================================
   const DAFTAR_LINK = [
-    "https://youtu.be/YaLFW1JaOA0",
-    "https://youtu.be/WE6SwoadpdU",
-    "https://youtu.be/lR1WW657gJU",
-    "https://youtu.be/f2lD7clyD3E?si=S2bf6YUuYkXkPv-C",
-    "https://youtu.be/kmeepFLvO8E?si=ibc8BSwkUEW7_10Y",
-    "https://youtu.be/a1-SNwGzJio?si=212JfUBxLAPTCpI8",
-    "https://youtu.be/B9TUzbZWwoU?si=LGdbvaKByJbc3yzI",
-    "https://youtu.be/jLLNtfE27_I",
-    "https://youtu.be/M7oZR-MTEZs?si=qFoqZID-6t9eZ4ln",
-    "https://youtu.be/RO75uUZiAw0?si=4N_RLolbQn_HFbMe",
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://youtu.be/jNQXAC9IVRw",
+    "https://www.youtube.com/watch?v=9bZkp7q19f0"
     // Tambahkan link lainnya di bawah ini, pisahkan dengan tanda koma (,)
   ];
+
+  // Batas maksimal sesi putaran (otomatis berhenti setelah mencapai angka ini)
+  const MAKSIMAL_SESI = 3;
 
   // Rentang jeda waktu acak antar-video (dalam detik)
   const JEDA_MIN_DETIK = 3;
@@ -169,6 +180,7 @@
   let currentIndex = 0;
   let cycleCount = 1;
   let countdownInterval = null;
+  let isFinished = false;
 
   function extractVideoID(url) {
     const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
@@ -178,7 +190,6 @@
     return null;
   }
 
-  // Algoritma Fisher-Yates Shuffle (Acak merata tanpa duplikat dalam 1 sesi)
   function shuffleArray(array) {
     const arr = [...array];
     for (let i = arr.length - 1; i > 0; i--) {
@@ -196,10 +207,11 @@
     }
     currentQueue = shuffleArray(videoIds);
     currentIndex = 0;
+    cycleCount = 1;
+    isFinished = false;
     updateUI();
   }
 
-  // Memuat YouTube IFrame API resmi
   const tag = document.createElement('script');
   tag.src = "https://www.youtube.com/iframe_api";
   const firstScriptTag = document.getElementsByTagName('script')[0];
@@ -213,7 +225,7 @@
       videoId: currentQueue[currentIndex],
       playerVars: {
         autoplay: 1,
-        mute: 1, // Mute awal agar autoplay diizinkan semua browser
+        mute: 1,
         rel: 0,
         playsinline: 1
       },
@@ -229,15 +241,18 @@
   }
 
   function onPlayerStateChange(event) {
-    // YT.PlayerState.ENDED (0) = Video utama selesai diputar (bukan iklan)
+    if (isFinished) return;
     if (event.data === YT.PlayerState.ENDED) {
-      startRandomDelayAndNext();
+      if (currentIndex + 1 >= currentQueue.length && cycleCount >= MAKSIMAL_SESI) {
+        finishAllCycles();
+      } else {
+        startRandomDelayAndNext();
+      }
     }
   }
 
-  // Anti-macet: Jika ada link yang dihapus/privat/error, langsung lompat ke berikutnya
   function onPlayerError() {
-    console.warn("Video error/tidak tersedia, melompat ke video berikutnya...");
+    if (isFinished) return;
     playNextVideo();
   }
 
@@ -269,8 +284,11 @@
     document.getElementById('delayOverlay').classList.remove('active');
 
     currentIndex++;
-    // Jika semua video dalam 1 sesi sudah diputar, acak ulang dan mulai sesi baru
     if (currentIndex >= currentQueue.length) {
+      if (cycleCount >= MAKSIMAL_SESI) {
+        finishAllCycles();
+        return;
+      }
       cycleCount++;
       currentQueue = shuffleArray(videoIds);
       currentIndex = 0;
@@ -280,14 +298,39 @@
     updateUI();
   }
 
+  function finishAllCycles() {
+    isFinished = true;
+    clearInterval(countdownInterval);
+    document.getElementById('delayOverlay').classList.remove('active');
+    if (player && player.stopVideo) {
+      player.stopVideo();
+    }
+    document.getElementById('finishedSubtext').innerText = `Semua video telah diputar sebanyak ${MAKSIMAL_SESI} sesi penuh.`;
+    document.getElementById('finishedOverlay').classList.add('active');
+    document.getElementById('statusText').innerHTML = `Selesai &bull; <strong>${MAKSIMAL_SESI} dari ${MAKSIMAL_SESI} Sesi</strong> tercapai`;
+    
+    const queueList = document.getElementById('queueList');
+    queueList.innerHTML = currentQueue.map((id, idx) => `<span class="badge done">#${idx + 1} (${id})</span>`).join('');
+  }
+
+  function restartFromBeginning() {
+    document.getElementById('finishedOverlay').classList.remove('active');
+    initPlaylist();
+    player.loadVideoById(currentQueue[currentIndex]);
+  }
+
   function skipToNext() {
+    if (isFinished) return;
     playNextVideo();
   }
 
   function forceReshuffle() {
+    if (isFinished) {
+      restartFromBeginning();
+      return;
+    }
     clearInterval(countdownInterval);
     document.getElementById('delayOverlay').classList.remove('active');
-    cycleCount++;
     currentQueue = shuffleArray(videoIds);
     currentIndex = 0;
     player.loadVideoById(currentQueue[currentIndex]);
@@ -296,7 +339,7 @@
 
   function updateUI() {
     const statusText = document.getElementById('statusText');
-    statusText.innerHTML = `Sesi Putaran ke-<strong>${cycleCount}</strong> &bull; Video <strong>${currentIndex + 1}</strong> dari <strong>${currentQueue.length}</strong>`;
+    statusText.innerHTML = `Sesi <strong>${cycleCount} dari ${MAKSIMAL_SESI}</strong> &bull; Video <strong>${currentIndex + 1}</strong> dari <strong>${currentQueue.length}</strong>`;
 
     const queueList = document.getElementById('queueList');
     queueList.innerHTML = currentQueue.map((id, idx) => {
