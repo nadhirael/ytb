@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auto-Shuffle YouTube Viewer</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: #0f0f0f;
+      color: #ffffff;
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .container {
+      width: 100%;
+      max-width: 900px;
+    }
+    .player-wrapper {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    }
+    #player {
+      width: 100%;
+      height: 100%;
+    }
+    /* Layar overlay saat jeda antar-video */
+    .delay-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(15, 15, 15, 0.92);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      z-index: 10;
+      padding: 20px;
+    }
+    .delay-overlay.active {
+      display: flex;
+    }
+    .delay-timer {
+      font-size: 42px;
+      font-weight: bold;
+      color: #ff0000;
+      margin: 8px 0;
+    }
+    .status-bar {
+      background: #1e1e1e;
+      margin-top: 16px;
+      padding: 16px 20px;
+      border-radius: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .info-text {
+      font-size: 14px;
+      color: #cccccc;
+    }
+    .info-text strong {
+      color: #ffffff;
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+    }
+    button {
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 13px;
+      transition: opacity 0.2s;
+    }
+    button:hover { opacity: 0.85; }
+    .btn-next { background: #ff0000; color: #fff; }
+    .btn-shuffle { background: #333333; color: #fff; }
+    .queue-box {
+      margin-top: 16px;
+      background: #181818;
+      padding: 14px 20px;
+      border-radius: 10px;
+      font-size: 13px;
+      color: #888;
+    }
+    .queue-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .badge {
+      padding: 4px 8px;
+      border-radius: 4px;
+      background: #252525;
+      font-family: monospace;
+    }
+    .badge.done { color: #555; text-decoration: line-through; }
+    .badge.current { background: #ff0000; color: #fff; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <div class="player-wrapper">
+    <div id="player"></div>
+    <div class="delay-overlay" id="delayOverlay">
+      <div>Menyiapkan video berikutnya dalam...</div>
+      <div class="delay-timer" id="countdownText">0</div>
+      <div style="font-size: 13px; color: #aaa;">Jeda otomatis agar pemutaran lebih natural</div>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div class="info-text" id="statusText">Memuat antrean video...</div>
+    <div class="controls">
+      <button class="btn-next" onclick="skipToNext()">Video Berikutnya ⏭</button>
+      <button class="btn-shuffle" onclick="forceReshuffle()">Acak Ulang Sesi 🔀</button>
+    </div>
+  </div>
+
+  <div class="queue-box">
+    <div>Urutan Sesi Ini (Semua akan diputar sebelum diacak ulang):</div>
+    <div class="queue-list" id="queueList"></div>
+  </div>
+</div>
+
+<script>
+  // =========================================================================
+  // PENGATURAN UTAMA (EDIT BAGIAN INI LANGSUNG DI GITHUB)
+  // =========================================================================
+  const DAFTAR_LINK = [
+    "https://youtu.be/YaLFW1JaOA0",
+    "https://youtu.be/WE6SwoadpdU",
+    "https://youtu.be/lR1WW657gJU",
+    "https://youtu.be/f2lD7clyD3E?si=S2bf6YUuYkXkPv-C",
+    "https://youtu.be/kmeepFLvO8E?si=ibc8BSwkUEW7_10Y",
+    "https://youtu.be/a1-SNwGzJio?si=212JfUBxLAPTCpI8",
+    "https://youtu.be/B9TUzbZWwoU?si=LGdbvaKByJbc3yzI",
+    "https://youtu.be/jLLNtfE27_I",
+    "https://youtu.be/M7oZR-MTEZs?si=qFoqZID-6t9eZ4ln",
+    "https://youtu.be/RO75uUZiAw0?si=4N_RLolbQn_HFbMe",
+    // Tambahkan link lainnya di bawah ini, pisahkan dengan tanda koma (,)
+  ];
+
+  // Rentang jeda waktu acak antar-video (dalam detik)
+  const JEDA_MIN_DETIK = 3;
+  const JEDA_MAX_DETIK = 10;
+  // =========================================================================
+
+  let player;
+  let videoIds = [];
+  let currentQueue = [];
+  let currentIndex = 0;
+  let cycleCount = 1;
+  let countdownInterval = null;
+
+  function extractVideoID(url) {
+    const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
+    const match = url.match(regExp);
+    if (match && match[1]) return match[1];
+    if (url.trim().length === 11) return url.trim();
+    return null;
+  }
+
+  // Algoritma Fisher-Yates Shuffle (Acak merata tanpa duplikat dalam 1 sesi)
+  function shuffleArray(array) {
+    const arr = [...array];
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  function initPlaylist() {
+    videoIds = DAFTAR_LINK.map(extractVideoID).filter(id => id !== null);
+    if (videoIds.length === 0) {
+      document.getElementById('statusText').innerText = "Error: Tidak ada link YouTube yang valid.";
+      return;
+    }
+    currentQueue = shuffleArray(videoIds);
+    currentIndex = 0;
+    updateUI();
+  }
+
+  // Memuat YouTube IFrame API resmi
+  const tag = document.createElement('script');
+  tag.src = "https://www.youtube.com/iframe_api";
+  const firstScriptTag = document.getElementsByTagName('script')[0];
+  firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+  function onYouTubeIframeAPIReady() {
+    initPlaylist();
+    if (currentQueue.length === 0) return;
+
+    player = new YT.Player('player', {
+      videoId: currentQueue[currentIndex],
+      playerVars: {
+        autoplay: 1,
+        mute: 1, // Mute awal agar autoplay diizinkan semua browser
+        rel: 0,
+        playsinline: 1
+      },
+      events: {
+        onReady: (event) => {
+          event.target.playVideo();
+          updateUI();
+        },
+        onStateChange: onPlayerStateChange,
+        onError: onPlayerError
+      }
+    });
+  }
+
+  function onPlayerStateChange(event) {
+    // YT.PlayerState.ENDED (0) = Video utama selesai diputar (bukan iklan)
+    if (event.data === YT.PlayerState.ENDED) {
+      startRandomDelayAndNext();
+    }
+  }
+
+  // Anti-macet: Jika ada link yang dihapus/privat/error, langsung lompat ke berikutnya
+  function onPlayerError() {
+    console.warn("Video error/tidak tersedia, melompat ke video berikutnya...");
+    playNextVideo();
+  }
+
+  function startRandomDelayAndNext() {
+    clearInterval(countdownInterval);
+    const delaySeconds = Math.floor(Math.random() * (JEDA_MAX_DETIK - JEDA_MIN_DETIK + 1)) + JEDA_MIN_DETIK;
+    let remaining = delaySeconds;
+
+    const overlay = document.getElementById('delayOverlay');
+    const timerText = document.getElementById('countdownText');
+    
+    timerText.innerText = remaining + "d";
+    overlay.classList.add('active');
+
+    countdownInterval = setInterval(() => {
+      remaining--;
+      if (remaining > 0) {
+        timerText.innerText = remaining + "d";
+      } else {
+        clearInterval(countdownInterval);
+        overlay.classList.remove('active');
+        playNextVideo();
+      }
+    }, 1000);
+  }
+
+  function playNextVideo() {
+    clearInterval(countdownInterval);
+    document.getElementById('delayOverlay').classList.remove('active');
+
+    currentIndex++;
+    // Jika semua video dalam 1 sesi sudah diputar, acak ulang dan mulai sesi baru
+    if (currentIndex >= currentQueue.length) {
+      cycleCount++;
+      currentQueue = shuffleArray(videoIds);
+      currentIndex = 0;
+    }
+
+    player.loadVideoById(currentQueue[currentIndex]);
+    updateUI();
+  }
+
+  function skipToNext() {
+    playNextVideo();
+  }
+
+  function forceReshuffle() {
+    clearInterval(countdownInterval);
+    document.getElementById('delayOverlay').classList.remove('active');
+    cycleCount++;
+    currentQueue = shuffleArray(videoIds);
+    currentIndex = 0;
+    player.loadVideoById(currentQueue[currentIndex]);
+    updateUI();
+  }
+
+  function updateUI() {
+    const statusText = document.getElementById('statusText');
+    statusText.innerHTML = `Sesi Putaran ke-<strong>${cycleCount}</strong> &bull; Video <strong>${currentIndex + 1}</strong> dari <strong>${currentQueue.length}</strong>`;
+
+    const queueList = document.getElementById('queueList');
+    queueList.innerHTML = currentQueue.map((id, idx) => {
+      let cls = 'badge';
+      if (idx < currentIndex) cls += ' done';
+      if (idx === currentIndex) cls += ' current';
+      return `<span class="${cls}">#${idx + 1} (${id})</span>`;
+    }).join('');
+  }
+</script>
+
+</body>
+</html>
