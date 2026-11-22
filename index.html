@@ -61,6 +61,20 @@
       color: #4ade80;
       margin-bottom: 8px;
     }
+    .error-banner {
+      display: none;
+      background: #450a0a;
+      border: 1px solid #ef4444;
+      color: #fca5a5;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-top: 12px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .error-banner.active {
+      display: block;
+    }
     .status-bar {
       background: #1e1e1e;
       margin-top: 16px;
@@ -141,6 +155,9 @@
     </div>
   </div>
 
+  <!-- Kotak Diagnosa Error (Muncul hanya jika video ditolak YouTube) -->
+  <div class="error-banner" id="errorBanner"></div>
+
   <div class="status-bar">
     <div class="info-text" id="statusText">Memuat antrean video...</div>
     <div class="controls">
@@ -157,7 +174,7 @@
 
 <script>
   // =========================================================================
-  // PENGATURAN UTAMA (EDIT BAGIAN INI LANGSUNG DI GITHUB)
+  // PENGATURAN UTAMA (DAFTAR 10 LINK VIDEO)
   // =========================================================================
   const DAFTAR_LINK = [
     "https://youtu.be/YaLFW1JaOA0",
@@ -170,15 +187,13 @@
     "https://youtu.be/jLLNtfE27_I",
     "https://youtu.be/M7oZR-MTEZs?si=qFoqZID-6t9eZ4ln",
     "https://youtu.be/RO75uUZiAw0?si=4N_RLolbQn_HFbMe"
-    // Tambahkan link lainnya di bawah ini, pisahkan dengan tanda koma (,)
   ];
 
-  // Batas maksimal sesi putaran (otomatis berhenti setelah mencapai angka ini)
   const MAKSIMAL_SESI = 3;
 
   // Rentang jeda waktu acak antar-video (dalam detik)
-  const JEDA_MIN_DETIK = 3;
-  const JEDA_MAX_DETIK = 10;
+  const JEDA_MIN_DETIK = 15;
+  const JEDA_MAX_DETIK = 45;
   // =========================================================================
 
   let player;
@@ -216,6 +231,7 @@
     currentIndex = 0;
     cycleCount = 1;
     isFinished = false;
+    hideError();
     updateUI();
   }
 
@@ -234,7 +250,8 @@
         autoplay: 1,
         mute: 1,
         rel: 0,
-        playsinline: 1
+        playsinline: 1,
+        origin: window.location.origin
       },
       events: {
         onReady: (event) => {
@@ -249,6 +266,9 @@
 
   function onPlayerStateChange(event) {
     if (isFinished) return;
+    if (event.data === YT.PlayerState.PLAYING) {
+      hideError();
+    }
     if (event.data === YT.PlayerState.ENDED) {
       if (currentIndex + 1 >= currentQueue.length && cycleCount >= MAKSIMAL_SESI) {
         finishAllCycles();
@@ -258,9 +278,30 @@
     }
   }
 
-  function onPlayerError() {
+  function onPlayerError(event) {
     if (isFinished) return;
-    playNextVideo();
+    const errorCode = event.data;
+    let reason = "Terjadi kesalahan pemutaran tidak dikenal.";
+
+    if (errorCode === 2) {
+      reason = "ID Video tidak valid (cek kembali penulisan link di GitHub).";
+    } else if (errorCode === 5) {
+      reason = "Pemutar HTML5 gagal memuat video di browser ini.";
+    } else if (errorCode === 100) {
+      reason = "Video tidak ditemukan (sudah dihapus atau berstatus Privat).";
+    } else if (errorCode === 101 || errorCode === 150) {
+      reason = "Pemilik video mematikan fitur Embed (Izinkan Penyematan). Aktifkan di YouTube Studio.";
+    }
+
+    const banner = document.getElementById('errorBanner');
+    banner.innerHTML = `<strong>⚠️ Video #${currentIndex + 1} (${currentQueue[currentIndex]}) Gagal Diputar [Kode Error: ${errorCode}]</strong><br>${reason}`;
+    banner.classList.add('active');
+  }
+
+  function hideError() {
+    const banner = document.getElementById('errorBanner');
+    banner.classList.remove('active');
+    banner.innerHTML = '';
   }
 
   function startRandomDelayAndNext() {
@@ -289,6 +330,7 @@
   function playNextVideo() {
     clearInterval(countdownInterval);
     document.getElementById('delayOverlay').classList.remove('active');
+    hideError();
 
     currentIndex++;
     if (currentIndex >= currentQueue.length) {
@@ -309,6 +351,7 @@
     isFinished = true;
     clearInterval(countdownInterval);
     document.getElementById('delayOverlay').classList.remove('active');
+    hideError();
     if (player && player.stopVideo) {
       player.stopVideo();
     }
@@ -338,6 +381,7 @@
     }
     clearInterval(countdownInterval);
     document.getElementById('delayOverlay').classList.remove('active');
+    hideError();
     currentQueue = shuffleArray(videoIds);
     currentIndex = 0;
     player.loadVideoById(currentQueue[currentIndex]);
